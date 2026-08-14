@@ -32,7 +32,9 @@ SPREAD_BPS = {
 
 # نأخذ آخر سنتين فقط من البيانات الساعية لكل زوج (حجم بيانات كبير جداً لتشغيل
 # ساعي كامل على 10 سنوات x7 أزواج ضمن وقت معقول) — عيّنة حديثة كافية للتقييم.
-HOURS_WINDOW = 24 * 30 * 6  # آخر ~6 أشهر من البيانات الساعية لكل زوج
+HOURS_WINDOW = 24 * 365  # آخر سنة كاملة من البيانات الساعية  # آخر ~6 أشهر من البيانات الساعية لكل زوج
+CONFIRM_BARS = 3  # عدد الشموع المتتالية المطلوبة لتأكيد الإشارة قبل الدخول/الخروج
+ENGINE_TYPE = "trend_fib"  # "fibonacci" | "trend_fib" | "trend"
 
 
 def max_drawdown(equity: np.ndarray) -> float:
@@ -63,7 +65,9 @@ for symbol, divisor in PAIRS.items():
         symbols=[symbol],
         config={
             "initial_balance": 100000,
-            "trend": {"fast_period": 4, "slow_period": 12, "momentum_period": 4},
+            "engine_type": ENGINE_TYPE,
+            "trend": {"fast_period": 4, "slow_period": 12, "momentum_period": 4, "confirm_bars": CONFIRM_BARS},
+            "fibonacci": {"lookback": 50, "tolerance_pct": 0.0015, "min_swing_pct": 0.004, "reversal_confirm_bars": 2},
             "risk": {
                 "max_position_pct": 0.10,
                 "stop_loss_pct": 0.006,           # وقف أولي أضيق (سكالبينج)
@@ -150,5 +154,6 @@ print(f"متوسط Sharpe (استراتيجية): {res_df['strategy_sharpe'].mea
 print(f"متوسط أقصى تراجع (استراتيجية): {res_df['strategy_max_dd_pct'].mean():.2f}%  |  (B&H): {res_df['buy_hold_max_dd_pct'].mean():.2f}%")
 print(f"إجمالي الخروج بوقف أولي (خسارة): {res_df['exits_stop_loss'].sum()}  |  إجمالي الخروج بوقف متحرك (ربح محمي): {res_df['exits_trailing_profit'].sum()}")
 
-res_df.to_csv("backtest_scalping_forex_results.csv", index=False)
-print("\nتم حفظ النتائج في backtest_scalping_forex_results.csv")
+out_name = f"backtest_{ENGINE_TYPE}_results.csv"
+res_df.to_csv(out_name, index=False)
+print(f"\nتم حفظ النتائج في {out_name}")

@@ -203,10 +203,20 @@ class TrendSignalEngine:
     يمكن تدقيقه بالكامل.
     """
 
-    def __init__(self, fast_period: int = 10, slow_period: int = 30, momentum_period: int = 10):
+    def __init__(self, fast_period: int = 10, slow_period: int = 30, momentum_period: int = 10,
+                 confirm_bars: int = 1):
+        """
+        confirm_bars: عدد الشموع المتتالية التي يجب أن يستمر فيها نفس اتجاه
+        التقاطع الخام قبل إصدار إشارة فعلية (1 = بدون تأكيد، كالسابق).
+        الهدف: تقليل "ارتداد الإشارة" السريع الذي يقفل الصفقة قبل ما يعطي
+        فرصة كافية لمنطق breakeven/trailing.
+        """
         self.fast_period = fast_period
         self.slow_period = slow_period
         self.momentum_period = momentum_period
+        self.confirm_bars = max(1, confirm_bars)
+        self._raw_direction_streak = 0
+        self._last_raw_direction = 0
 
     @staticmethod
     def _sma(values: List[float], period: int) -> float:
@@ -235,11 +245,22 @@ class TrendSignalEngine:
         # اتجاه أساسي: فوق/تحت المتوسط البطيء = فلتر الاتجاه العام
         above_slow = prices[-1] > slow_ma
 
-        direction = 0
+        raw_direction = 0
         if spread > 0 and momentum > 0 and above_slow:
-            direction = 1
+            raw_direction = 1
         elif spread < 0 and momentum < 0 and not above_slow:
-            direction = -1
+            raw_direction = -1
+
+        # ✅ فلتر التأكيد: لا نصدر إشارة فعلية إلا بعد استمرار نفس اتجاه
+        # التقاطع الخام لعدد confirm_bars متتالية — يمنع الدخول/الخروج على
+        # أول تذبذب لحظي وينتظر شكل اتجاه أوضح.
+        if raw_direction != 0 and raw_direction == self._last_raw_direction:
+            self._raw_direction_streak += 1
+        else:
+            self._raw_direction_streak = 1 if raw_direction != 0 else 0
+        self._last_raw_direction = raw_direction
+
+        direction = raw_direction if self._raw_direction_streak >= self.confirm_bars else 0
 
         # الثقة: تُبنى من قوة الفصل بين المتوسطين، مقيّدة بمقياس معقول (لا صيغة تعطي 100% تعسفاً)
         raw_strength = min(abs(spread) * 25, 1.0)  # spread ~4% => أقصى ثقة تقريباً
@@ -253,6 +274,117 @@ class TrendSignalEngine:
             "slow_ma": slow_ma,
             "spread_pct": round(spread * 100, 3),
             "momentum_pct": round(momentum * 100, 3),
+        }
+
+
+# ============ محرك فيبوناتشي (توقيت دخول عند التصحيح) ============
+
+class FibonacciSignalEngine:
+    """
+    استراتيجية فيبوناتشي كلاسيكية: تحدد آخر "سوينغ" (قمة/قاع بارزين) ضمن نافذة
+    محددة، تحسب مستويات التصحيح (23.6%, 38.2%, 50%, 61.8%, 78.6%)، وتدخل فقط
+    عند ارتداد فعلي للسعر من أحد هذه المستويات — مو مجرد لمس المستوى.
+
+    ملاحظة صادقة: فيبوناتشي بحد ذاته أداة توقيت هندسية، مو نموذج تنبؤي مُتحقق
+    إحصائياً؛ نجاحه هنا (إن وُجد) يعتمد كلياً على قوة تأكيد الارتداد، لا على
+    "سحر" النسب الذهبية.
+    """
+
+    LEVELS = (0.236, 0.382, 0.5, 0.618, 0.786)
+    # ثقة أعلى للمستويات الأكثر اعتماداً تقليدياً (61.8% "الذهبي"، 50%، 38.2%)
+    LEVEL_WEIGHT = {0.236: 0.55, 0.382: 0.80, 0.5: 0.85, 0.618: 1.0, 0.786: 0.65}
+
+    def __init__(self, lookback: int = 50, tolerance_pct: float = 0.0015,
+                 min_swing_pct: float = 0.004, reversal_confirm_bars: int = 2):
+        self.lookback = lookback
+        self.tolerance_pct = tolerance_pct       # مدى القرب المقبول من المستوى
+        self.min_swing_pct = min_swing_pct        # تجاهل السوينغات الصغيرة جداً (ضجيج)
+        self.reversal_confirm_bars = reversal_confirm_bars
+
+    def compute(self, prices: List[float]) -> Dict:
+        if len(prices) < self.lookback + self.reversal_confirm_bars + 2:
+            return {"direction": 0, "confidence": 0, "reason": "بيانات غير كافية"}
+
+        window = prices[-self.lookback:]
+        swing_high = max(window)
+        swing_low = min(window)
+        idx_high = len(window) - 1 - window[::-1].index(swing_high)
+        idx_low = len(window) - 1 - window[::-1].index(swing_low)
+        swing_range = swing_high - swing_low
+
+        if swing_low <= 0 or swing_range / swing_low < self.min_swing_pct:
+            return {"direction": 0, "confidence": 0, "reason": "سوينغ ضيق جداً"}
+
+        uptrend_swing = idx_low < idx_high  # القاع تشكّل قبل القمة => سوينغ صاعد
+        current = prices[-1]
+
+        direction = 0
+        confidence = 0.0
+        touched_level = None
+
+        recent = prices[-(self.reversal_confirm_bars + 1):]
+
+        for r in self.LEVELS:
+            if uptrend_swing:
+                level = swing_high - r * swing_range  # مستوى تصحيح هابط داخل سوينغ صاعد
+            else:
+                level = swing_low + r * swing_range   # مستوى تصحيح صاعد داخل سوينغ هابط
+
+            if level <= 0:
+                continue
+            near_level = min(abs(p - level) / level for p in recent) <= self.tolerance_pct
+            if not near_level:
+                continue
+
+            if uptrend_swing:
+                # نبحث عن ارتداد صاعد: أدنى سعر بالنافذة القصيرة قريب من المستوى، ثم صعود
+                bounced_up = recent[-1] > min(recent) and current > level
+                if bounced_up:
+                    direction = 1
+            else:
+                bounced_down = recent[-1] < max(recent) and current < level
+                if bounced_down:
+                    direction = -1
+
+            if direction != 0:
+                touched_level = r
+                confidence = 45 + self.LEVEL_WEIGHT[r] * 50  # نطاق تقريبي [45, 95]
+                break  # أول مستوى مؤكَّد كافٍ
+
+        return {
+            "direction": direction,
+            "confidence": round(confidence, 2) if direction != 0 else 0.0,
+            "swing_high": swing_high, "swing_low": swing_low,
+            "uptrend_swing": uptrend_swing, "fib_level": touched_level,
+        }
+
+
+class TrendFibonacciEngine:
+    """
+    ✅ الدمج الموصى به عملياً: TrendSignalEngine يحدد الاتجاه العام (فلتر)،
+    وFibonacciSignalEngine يحدد توقيت الدخول الدقيق (لا ندخل إلا عند ارتداد
+    من مستوى تصحيح *في نفس اتجاه الترند الأعلى* — يمنع الدخول بفيبوناتشي
+    عكس الاتجاه العام، وهو خطأ شائع عند استخدام فيبوناتشي منفرداً).
+    """
+
+    def __init__(self, trend_kwargs: Dict = None, fib_kwargs: Dict = None):
+        self.trend_engine = TrendSignalEngine(**(trend_kwargs or {"fast_period": 4, "slow_period": 12, "momentum_period": 4}))
+        self.fib_engine = FibonacciSignalEngine(**(fib_kwargs or {}))
+
+    def compute(self, prices: List[float]) -> Dict:
+        trend = self.trend_engine.compute(prices)
+        fib = self.fib_engine.compute(prices)
+
+        direction = 0
+        confidence = 0.0
+        if fib["direction"] != 0 and trend["direction"] == fib["direction"]:
+            direction = fib["direction"]
+            # الثقة تُبنى من تأكيد الطرفين معاً (اتجاه + توقيت فيبو)
+            confidence = round(min(95.0, fib["confidence"] * 0.6 + trend.get("confidence", 0) * 0.4), 2)
+
+        return {
+            "direction": direction, "confidence": confidence if direction != 0 else 0.0,
+            "trend_direction": trend["direction"], "fib_level": fib.get("fib_level"),
         }
 
 
@@ -459,7 +591,17 @@ class FixedHFTAgent:
         self.data_provider = data_provider
         self.symbols = symbols
 
-        self.signal_engine = TrendSignalEngine(**self.config.get("trend", {"fast_period": 4, "slow_period": 12, "momentum_period": 4}))
+        # ✅ اختيار محرك الإشارة عبر config["engine_type"]: "trend" (افتراضي),
+        # "fibonacci" (مستقل), أو "trend_fib" (اتجاه كفلتر + فيبوناتشي كتوقيت دخول)
+        engine_type = self.config.get("engine_type", "trend")
+        if engine_type == "fibonacci":
+            self.signal_engine = FibonacciSignalEngine(**self.config.get("fibonacci", {}))
+        elif engine_type == "trend_fib":
+            self.signal_engine = TrendFibonacciEngine(
+                trend_kwargs=self.config.get("trend"), fib_kwargs=self.config.get("fibonacci"),
+            )
+        else:
+            self.signal_engine = TrendSignalEngine(**self.config.get("trend", {"fast_period": 4, "slow_period": 12, "momentum_period": 4}))
         self.sentiment_analyzer = SentimentAnalyzer()
         self.risk_manager = RiskManager(**self.config.get("risk", {}))
 
@@ -622,7 +764,9 @@ class FixedHFTAgent:
                 "symbol": symbol, "side": "buy", "quantity": quantity,
                 "price": price, "stop_loss": stop_loss, "timestamp": datetime.now().isoformat(),
             })
-            self.stats["total_trades"] += 1
+            # ✅ إصلاح: الشراء "دخول" مش "صفقة مكتملة" — لا يُحسب هنا لتفادي
+            # خلط الدخول بالخروج في نفس عدّاد total_trades (كان يُضخّم العدد
+            # ويشوّه win_rate الحقيقي لكل صفقة مغلقة).
 
         self.logger.info(f"🟢 شراء {quantity:.4f} {symbol} @ {price:.4f} | وقف خسارة: {stop_loss:.4f}")
         return {"status": "executed", "type": "buy", "quantity": quantity, "price": price}
@@ -696,6 +840,11 @@ class FixedHFTAgent:
                 "symbol": symbol, "side": "stop_loss", "quantity": quantity,
                 "price": price, "profit": profit, "timestamp": datetime.now().isoformat(),
             })
+            # ✅ إصلاح: هذا خروج فعلي (وقف أولي أو وقف متحرك) — يجب أن يُحسب
+            # كصفقة مغلقة ويُصنَّف ربح/خسارة مثل _execute_sell تماماً، وإلا
+            # فـ win_rate يتجاهل كل صفقات الحماية (breakeven/trailing).
+            self.stats["total_trades"] += 1
+            self.stats["winning_trades" if profit > 0 else "losing_trades"] += 1
             self.stats["returns"].append(profit / self.initial_balance)
 
     def calculate_performance(self) -> Dict:

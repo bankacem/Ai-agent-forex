@@ -32,7 +32,8 @@ SPREAD_BPS = {
 
 # نأخذ آخر سنتين فقط من البيانات الساعية لكل زوج (حجم بيانات كبير جداً لتشغيل
 # ساعي كامل على 10 سنوات x7 أزواج ضمن وقت معقول) — عيّنة حديثة كافية للتقييم.
-HOURS_WINDOW = 24 * 30 * 6  # آخر ~6 أشهر من البيانات الساعية لكل زوج
+HOURS_WINDOW = 24 * 365  # آخر ~6 أشهر من البيانات الساعية لكل زوج
+CONFIRM_BARS = 3  # عدد الشموع المتتالية المطلوبة لتأكيد الإشارة قبل الدخول/الخروج
 
 
 def max_drawdown(equity: np.ndarray) -> float:
@@ -63,7 +64,11 @@ for symbol, divisor in PAIRS.items():
         symbols=[symbol],
         config={
             "initial_balance": 100000,
-            "trend": {"fast_period": 4, "slow_period": 12, "momentum_period": 4},
+            # ✅ التعديل المقترح: نفس فترات السكالبينج السريعة (4/12) لكن مع
+            # فلتر تأكيد (confirm_bars) يمنع محرك الإشارة من الخروج على أول
+            # ارتداد لحظي — يعطي الصفقة فرصة أكبر تصل لمنطقة الربح قبل ما
+            # إشارة عكسية سريعة تقفلها.
+            "trend": {"fast_period": 4, "slow_period": 12, "momentum_period": 4, "confirm_bars": CONFIRM_BARS},
             "risk": {
                 "max_position_pct": 0.10,
                 "stop_loss_pct": 0.006,           # وقف أولي أضيق (سكالبينج)
