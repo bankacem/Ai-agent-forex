@@ -1,0 +1,17 @@
+{
+  "host": "extensionto.com",
+  "key": "YOUR_INDEXNOW_KEY",
+  "keyLocation": "https://extensionto.com/YOUR_INDEXNOW_KEY.txt",
+  "urlList": [
+    "https://extensionto.com/blog/gemini-in-chrome-2026-complete-guide",
+    "https://extensionto.com/fr/blog/gemini-in-chrome-2026-complete-guide",
+    "https://extensionto.com/es/blog/gemini-in-chrome-2026-complete-guide",
+    "https://extensionto.com/pt/blog/gemini-in-chrome-2026-complete-guide",
+    "https://extensionto.com/ar/blog/gemini-in-chrome-2026-complete-guide",
+    "https://extensionto.com/blog/best-ai-chrome-extensions-2026",
+    "https://extensionto.com/fr/blog/best-ai-chrome-extensions-2026",
+    "https://extensionto.com/es/blog/best-ai-chrome-extensions-2026",
+    "https://extensionto.com/pt/blog/best-ai-chrome-extensions-2026",
+    "https://extensionto.com/ar/blog/best-ai-chrome-extensions-2026"
+  ]
+}
